@@ -54,6 +54,11 @@ def test_sections_follow_heading_hierarchy() -> None:
     ]
 
 
+def test_heading_anchor_attributes_are_dropped_from_section() -> None:
+    doc = parse_markdown("p.md", "# Pods\n\n## Container restarts {#restart-policy}\n\nText.\n")
+    assert chunk_document(doc)[-1].section == "p > Pods > Container restarts"
+
+
 def test_heading_inside_code_fence_is_ignored() -> None:
     chunks = chunk_document(parse_markdown("concepts/pods.md", POD_DOC))
     restart = next(c for c in chunks if c.section.endswith("Restart policy"))
