@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from groundguard.documents import Document
 
 _HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t#]*$")
+# Heading attributes such as "## Restart policy {#restart-policy}" (Hugo,
+# Pandoc). They're anchors for links, not part of the title.
+_HEADING_ATTRS = re.compile(r"\s*\{[#.][^}]*\}\s*$")
 _FENCE = re.compile(r"^[ \t]*(```|~~~)")
 _BREAKS = ("\n\n", "\n", ". ", " ")
 
@@ -56,7 +59,8 @@ def _sections(doc: Document) -> list[_Section]:
                 level = len(match.group(1))
                 while stack and stack[-1][0] >= level:
                     stack.pop()
-                stack.append((level, match.group(2).strip()))
+                name = _HEADING_ATTRS.sub("", match.group(2)).strip()
+                stack.append((level, name))
                 current_path = " > ".join([doc.title, *(name for _, name in stack)])
                 current_start = offset
         offset += len(line)
