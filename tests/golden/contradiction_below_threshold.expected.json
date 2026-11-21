@@ -1,0 +1,37 @@
+{
+  "retrieved": [
+    "job.md#7",
+    "pod-lifecycle.md#4"
+  ],
+  "decision": "decline",
+  "claims": [
+    {
+      "text": "The default backoffLimit for a Job is 3.",
+      "evidence": [
+        "job.md#7"
+      ],
+      "invalid_citations": [],
+      "verdict": "contradicted",
+      "kept": false
+    },
+    {
+      "text": "backoffLimit sets the number of retries before the Job is marked failed.",
+      "evidence": [
+        "job.md#7"
+      ],
+      "invalid_citations": [],
+      "verdict": "supported",
+      "kept": false
+    },
+    {
+      "text": "Jobs ignore backoffLimit when running on Windows nodes.",
+      "evidence": [
+        "job.md#7"
+      ],
+      "invalid_citations": [],
+      "verdict": "not_enough_info",
+      "kept": false
+    }
+  ],
+  "message": "I can't answer that from the documents.\nThese points couldn't be confirmed:\n- The default backoffLimit for a Job is 3. (contradicted by the sources)\n- Jobs ignore backoffLimit when running on Windows nodes. (not stated in the sources)"
+}
