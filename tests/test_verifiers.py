@@ -3,7 +3,8 @@ from collections.abc import Sequence
 import pytest
 
 from groundguard.chunking import Chunk
-from groundguard.verifiers import NLIVerifier, Verdict, _normalise_label
+from groundguard.llm import FakeLLMClient
+from groundguard.verifiers import LLMJudgeVerifier, NLIVerifier, Verdict, _normalise_label
 
 
 def chunk(cid: str, text: str) -> Chunk:
@@ -81,3 +82,61 @@ def test_label_names_are_normalised(raw: str, expected: str) -> None:
 def test_unknown_label_raises() -> None:
     with pytest.raises(ValueError):
         _normalise_label("LABEL_0")
+
+
+def judge(reply: str) -> tuple[LLMJudgeVerifier, FakeLLMClient]:
+    client = FakeLLMClient([reply])
+    return LLMJudgeVerifier(client), client
+
+
+def test_judge_supported_maps_passage_to_chunk() -> None:
+    verifier, client = judge(
+        '{"verdict": "supported", "passage": 2, "confidence": 0.8, "reason": "stated"}'
+    )
+    result = verifier.verify("Jobs retry failed Pods.", [A, B])
+    assert result.verdict is Verdict.SUPPORTED
+    assert result.score == pytest.approx(0.8)
+    assert result.evidence_id == "b"
+    assert result.rationale == "stated"
+    prompt = client.calls[0][1]["content"]
+    assert "[1] Pods share" in prompt
+    assert "[2] Jobs retry" in prompt
+    assert prompt.endswith("Claim: Jobs retry failed Pods.")
+
+
+def test_judge_unsupported_score_is_inverted() -> None:
+    verifier, _ = judge('{"verdict": "not_enough_info", "passage": null, "confidence": 0.9}')
+    result = verifier.verify("claim", [A])
+    assert result.verdict is Verdict.NOT_ENOUGH_INFO
+    assert result.score == pytest.approx(0.1)
+    assert result.evidence_id is None
+
+
+def test_judge_accepts_fenced_json_and_ignores_bad_passage_numbers() -> None:
+    verifier, _ = judge(
+        '```json\n{"verdict": "contradicted", "passage": 7, "confidence": 1.0}\n```'
+    )
+    result = verifier.verify("claim", [A])
+    assert result.verdict is Verdict.CONTRADICTED
+    assert result.evidence_id is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I think it's supported.",
+        '{"verdict": "maybe", "confidence": 0.5}',
+        '{"verdict": "supported", "confidence": 1.5}',
+    ],
+)
+def test_judge_fails_closed_on_bad_replies(reply: str) -> None:
+    verifier, _ = judge(reply)
+    result = verifier.verify("claim", [A])
+    assert result.verdict is Verdict.NOT_ENOUGH_INFO
+    assert result.score == 0.0
+
+
+def test_judge_skips_llm_without_evidence() -> None:
+    verifier, client = judge("unused")
+    assert verifier.verify("claim", []).verdict is Verdict.NOT_ENOUGH_INFO
+    assert client.calls == []

@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
+from pydantic import BaseModel, Field, ValidationError
+
 from groundguard.chunking import Chunk
+from groundguard.llm import LLMClient, Message
 
 
 class Verdict(StrEnum):
@@ -126,3 +129,71 @@ def _normalise_label(name: str) -> str:
         if name.startswith(label[:5]):
             return label
     raise ValueError(f"unexpected NLI label {name!r}")
+
+
+JUDGE_PROMPT = """\
+You check whether a claim is supported by the given evidence passages. Judge \
+only from the passages, not from what you know.
+
+- "supported": the passages state the claim or directly imply it. Every part \
+of the claim must be covered, including numbers, names and conditions.
+- "contradicted": a passage says the opposite of the claim.
+- "not_enough_info": anything else, including claims that are only partly \
+covered.
+
+Reply with a single JSON object and nothing else:
+{"verdict": "supported", "passage": 1, "confidence": 0.9, "reason": "..."}
+
+"passage" is the number of the passage your verdict rests on, or null. \
+"confidence" is how sure you are of the verdict, from 0 to 1. Keep "reason" \
+to one sentence."""
+
+
+class _JudgeReply(BaseModel):
+    verdict: Verdict
+    passage: int | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = ""
+
+
+class LLMJudgeVerifier:
+    """Ask an LLM whether the cited passages support the claim.
+
+    Unlike the NLI verifier the judge sees all cited passages at once, so it
+    can accept claims that combine facts from two chunks. A reply that can't
+    be parsed is treated as not-enough-info: for a guard, failing closed is
+    the right default.
+    """
+
+    def __init__(self, client: LLMClient) -> None:
+        self.client = client
+        self.name = f"llm-judge:{client.model}"
+
+    def verify(self, claim: str, evidence: Sequence[Chunk]) -> Verification:
+        if not evidence:
+            return NO_EVIDENCE
+        passages = "\n\n".join(f"[{i}] {c.text}" for i, c in enumerate(evidence, start=1))
+        messages: list[Message] = [
+            {"role": "system", "content": JUDGE_PROMPT},
+            {"role": "user", "content": f"Passages:\n\n{passages}\n\nClaim: {claim}"},
+        ]
+        completion = self.client.complete(messages, json_mode=True)
+        try:
+            reply = _JudgeReply.model_validate_json(_strip_fence(completion.text))
+        except ValidationError:
+            return Verification(
+                Verdict.NOT_ENOUGH_INFO, 0.0, rationale="judge reply could not be parsed"
+            )
+        evidence_id = None
+        if reply.passage is not None and 1 <= reply.passage <= len(evidence):
+            evidence_id = evidence[reply.passage - 1].id
+        score = reply.confidence if reply.verdict is Verdict.SUPPORTED else 1 - reply.confidence
+        return Verification(reply.verdict, score, evidence_id, reply.reason)
+
+
+def _strip_fence(text: str) -> str:
+    body = text.strip()
+    if body.startswith("```"):
+        body = body.split("\n", 1)[1] if "\n" in body else ""
+        body = body.rsplit("```", 1)[0]
+    return body.strip()
