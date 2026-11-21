@@ -1,0 +1,38 @@
+{
+  "retrieved": [
+    "pod-lifecycle.md#5",
+    "job.md#7",
+    "pod-lifecycle.md#4"
+  ],
+  "decision": "partial",
+  "claims": [
+    {
+      "text": "The kubelet restarts exited containers with an exponential back-off delay.",
+      "evidence": [
+        "pod-lifecycle.md#5"
+      ],
+      "invalid_citations": [],
+      "verdict": "supported",
+      "kept": true
+    },
+    {
+      "text": "The back-off delay is capped at five minutes.",
+      "evidence": [
+        "pod-lifecycle.md#5"
+      ],
+      "invalid_citations": [],
+      "verdict": "supported",
+      "kept": true
+    },
+    {
+      "text": "The back-off resets after ten minutes of successful running.",
+      "evidence": [
+        "pod-lifecycle.md#5"
+      ],
+      "invalid_citations": [],
+      "verdict": "not_enough_info",
+      "kept": false
+    }
+  ],
+  "message": "The kubelet restarts exited containers with an exponential back-off delay. The back-off delay is capped at five minutes."
+}
