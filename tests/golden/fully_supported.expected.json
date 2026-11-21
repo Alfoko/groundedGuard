@@ -1,0 +1,29 @@
+{
+  "retrieved": [
+    "pod-lifecycle.md#4",
+    "job.md#7",
+    "pod-lifecycle.md#5"
+  ],
+  "decision": "answer",
+  "claims": [
+    {
+      "text": "The default restartPolicy for a Pod is Always.",
+      "evidence": [
+        "pod-lifecycle.md#4"
+      ],
+      "invalid_citations": [],
+      "verdict": "supported",
+      "kept": true
+    },
+    {
+      "text": "The restartPolicy applies to all containers in the Pod.",
+      "evidence": [
+        "pod-lifecycle.md#4"
+      ],
+      "invalid_citations": [],
+      "verdict": "supported",
+      "kept": true
+    }
+  ],
+  "message": "The default restartPolicy for a Pod is Always. The restartPolicy applies to all containers in the Pod."
+}

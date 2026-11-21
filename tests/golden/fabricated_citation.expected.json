@@ -1,0 +1,28 @@
+{
+  "retrieved": [
+    "job.md#7",
+    "pod-lifecycle.md#4"
+  ],
+  "decision": "partial",
+  "claims": [
+    {
+      "text": "The default backoffLimit for a Job is 6.",
+      "evidence": [
+        "job.md#7"
+      ],
+      "invalid_citations": [],
+      "verdict": "supported",
+      "kept": true
+    },
+    {
+      "text": "A Job with backoffLimit 0 is never retried.",
+      "evidence": [],
+      "invalid_citations": [
+        7
+      ],
+      "verdict": "not_enough_info",
+      "kept": false
+    }
+  ],
+  "message": "The default backoffLimit for a Job is 6."
+}
