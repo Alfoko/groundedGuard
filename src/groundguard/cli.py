@@ -94,6 +94,18 @@ def cmd_ask(args: argparse.Namespace, client: LLMClient | None = None) -> int:
     return 0
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    from groundguard.evaluation import EvalConfig, run_eval, write_report
+
+    config = EvalConfig.from_yaml(Path(args.config))
+    run = run_eval(config)
+    out = write_report(run)
+    print((out / "report.md").read_text())
+    if run.stopped_early:
+        print(f"Stopped early: {run.stopped_early}", file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="groundguard")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -113,6 +125,9 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("-k", type=int, default=6, help="number of chunks to retrieve")
     ask.add_argument("--embed", metavar="MODEL", help="embedding model used at ingest")
     ask.add_argument("--json", action="store_true")
+
+    ev = sub.add_parser("eval", help="run an evaluation config on RAGTruth")
+    ev.add_argument("config", help="path to a YAML config in configs/")
     return parser
 
 
@@ -120,6 +135,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "ingest":
         return cmd_ingest(args)
+    if args.command == "eval":
+        return cmd_eval(args)
     return cmd_ask(args)
 
 
