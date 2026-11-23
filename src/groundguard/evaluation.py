@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import random
 import time
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -60,6 +61,8 @@ class EvalConfig(BaseModel):
     cache_path: Path = Path(".cache/llm.sqlite")
     output_dir: Path = Path("results")
     chunk_chars: int = 1200
+    workers: int = Field(default=8, ge=1)
+    """Responses evaluated in parallel; LLM-judge runs are I/O bound."""
     bootstrap_resamples: int = 10_000
 
     @classmethod
@@ -116,12 +119,7 @@ def as_answer(example: Example, chunks: list[Chunk]) -> Answer:
     return Answer(example.question, chunks, structured, [])
 
 
-def evaluate_example(
-    example: Example,
-    guard: Guard | None,
-    tracker: UsageTracker,
-    chunk_chars: int,
-) -> ExampleResult:
+def evaluate_example(example: Example, guard: Guard | None, chunk_chars: int) -> ExampleResult:
     gold = gold_claims(example)
     labels = [g.hallucinated for g in gold]
     if guard is None:
@@ -140,7 +138,6 @@ def evaluate_example(
             0.0,
         )
 
-    cost_before = tracker.cost_usd
     start = time.perf_counter()
     answer = as_answer(example, context_chunks(example, chunk_chars))
     result = guard.check(answer)
@@ -150,6 +147,7 @@ def evaluate_example(
     kept = {id(r) for r in result.kept}
     shown = [r for r in result.claims if id(r) in kept]
     shown_bad = sum(lab for r, lab in zip(result.claims, labels, strict=True) if id(r) in kept)
+    costs = [r.verification.cost_usd for r in result.claims]
     return ExampleResult(
         example_id=example.id,
         task_type=example.task_type,
@@ -161,7 +159,7 @@ def evaluate_example(
         flagged=sum(flagged),
         caught=sum(f and lab for f, lab in zip(flagged, labels, strict=True)),
         latency_s=latency,
-        cost_usd=tracker.cost_usd - cost_before,
+        cost_usd=None if any(c is None for c in costs) else sum(c or 0.0 for c in costs),
     )
 
 
@@ -210,12 +208,20 @@ def run_eval(
         guard = Guard(verifier, config.policy)
 
     run = EvalRun(config, [])
-    for example in chosen:
-        try:
-            run.results.append(evaluate_example(example, guard, tracker, config.chunk_chars))
-        except BudgetExceeded as exc:
-            run.stopped_early = f"budget reached after {len(run.results)} examples: {exc}"
-            break
+    with ThreadPoolExecutor(max_workers=config.workers) as pool:
+        futures = [
+            pool.submit(evaluate_example, example, guard, config.chunk_chars) for example in chosen
+        ]
+        for future in futures:
+            try:
+                run.results.append(future.result())
+            except BudgetExceeded as exc:
+                if run.stopped_early is None:
+                    run.stopped_early = f"budget reached: {exc}"
+                    for pending in futures:
+                        pending.cancel()
+            except CancelledError:
+                continue
     return run
 
 

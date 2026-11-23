@@ -32,6 +32,8 @@ class Verification:
     evidence_id: str | None = None
     """The chunk that decided the verdict, when there is a single one."""
     rationale: str = ""
+    cost_usd: float | None = 0.0
+    """What producing this verdict cost; None if the provider didn't say."""
 
     @property
     def supported(self) -> bool:
@@ -178,17 +180,21 @@ class LLMJudgeVerifier:
             {"role": "user", "content": f"Passages:\n\n{passages}\n\nClaim: {claim}"},
         ]
         completion = self.client.complete(messages, json_mode=True)
+        cost = completion.usage.cost_usd
         try:
             reply = _JudgeReply.model_validate_json(_strip_fence(completion.text))
         except ValidationError:
             return Verification(
-                Verdict.NOT_ENOUGH_INFO, 0.0, rationale="judge reply could not be parsed"
+                Verdict.NOT_ENOUGH_INFO,
+                0.0,
+                rationale="judge reply could not be parsed",
+                cost_usd=cost,
             )
         evidence_id = None
         if reply.passage is not None and 1 <= reply.passage <= len(evidence):
             evidence_id = evidence[reply.passage - 1].id
         score = reply.confidence if reply.verdict is Verdict.SUPPORTED else 1 - reply.confidence
-        return Verification(reply.verdict, score, evidence_id, reply.reason)
+        return Verification(reply.verdict, score, evidence_id, reply.reason, cost)
 
 
 def _strip_fence(text: str) -> str:

@@ -109,7 +109,7 @@ def test_subset_sampling_is_seeded() -> None:
 def test_budget_stops_the_run_cleanly(tmp_path: Path) -> None:
     reply = '{"verdict": "supported", "passage": 1, "confidence": 0.9}'
     client = FakeLLMClient(lambda _: reply, cost_per_call=0.01)
-    cfg = config(tmp_path, verifier=VerifierConfig(kind="llm_judge"), budget_usd=0.025)
+    cfg = config(tmp_path, verifier=VerifierConfig(kind="llm_judge"), budget_usd=0.025, workers=1)
     run = run_eval(cfg, examples=EXAMPLES, verifier=LLMJudgeVerifier(client), client=client)
 
     assert run.stopped_early is not None
@@ -136,3 +136,21 @@ def test_config_round_trips_through_yaml(tmp_path: Path) -> None:
 def test_cli_eval_command_is_wired(tmp_path: Path) -> None:
     args = cli.build_parser().parse_args(["eval", str(tmp_path / "c.yaml")])
     assert args.command == "eval"
+
+
+def test_parallel_run_matches_sequential(tmp_path: Path) -> None:
+    def run(workers: int) -> list[tuple[str, str, int]]:
+        cfg = config(tmp_path, verifier=VerifierConfig(kind="nli"), workers=workers)
+        results = run_eval(cfg, examples=EXAMPLES, verifier=InContextVerifier()).results
+        return [(r.example_id, r.decision, r.shown) for r in results]
+
+    assert run(4) == run(1)
+
+
+def test_judge_cost_is_attributed_per_response(tmp_path: Path) -> None:
+    reply = '{"verdict": "supported", "passage": 1, "confidence": 0.9}'
+    client = FakeLLMClient(lambda _: reply, cost_per_call=0.01)
+    cfg = config(tmp_path, verifier=VerifierConfig(kind="llm_judge"), workers=3)
+    run = run_eval(cfg, examples=EXAMPLES, verifier=LLMJudgeVerifier(client), client=client)
+    # One judge call per claim, two claims per dev response.
+    assert [r.cost_usd for r in run.results] == pytest.approx([0.02, 0.02, 0.02])

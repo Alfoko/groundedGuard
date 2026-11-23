@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -48,7 +49,10 @@ class CachedLLMClient:
         self.hits = 0
         self.misses = 0
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path)
+        # One connection shared across eval worker threads; the lock
+        # serialises access, and the LLM call itself happens outside it.
+        self._db = sqlite3.connect(path, check_same_thread=False)
+        self._lock = threading.Lock()
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS completions (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
@@ -66,19 +70,22 @@ class CachedLLMClient:
         json_mode: bool = False,
     ) -> Completion:
         key = cache_key(self.model, messages, temperature, max_tokens, json_mode)
-        row = self._db.execute("SELECT value FROM completions WHERE key = ?", (key,)).fetchone()
+        with self._lock:
+            row = self._db.execute("SELECT value FROM completions WHERE key = ?", (key,)).fetchone()
+            if row is not None:
+                self.hits += 1
         if row is not None:
-            self.hits += 1
             data = json.loads(row[0])
             return Completion(data["text"], data["model"], Usage(**data["usage"]))
 
         completion = self.client.complete(
             messages, temperature=temperature, max_tokens=max_tokens, json_mode=json_mode
         )
-        self.misses += 1
-        self._db.execute(
-            "INSERT OR REPLACE INTO completions (key, value) VALUES (?, ?)",
-            (key, json.dumps(asdict(completion))),
-        )
-        self._db.commit()
+        with self._lock:
+            self.misses += 1
+            self._db.execute(
+                "INSERT OR REPLACE INTO completions (key, value) VALUES (?, ?)",
+                (key, json.dumps(asdict(completion))),
+            )
+            self._db.commit()
         return completion
