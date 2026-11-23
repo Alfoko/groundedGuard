@@ -17,9 +17,10 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from groundguard.chunking import Chunk
 from groundguard.citations import CheckedClaim, check_citations
 from groundguard.generation import Answer
-from groundguard.verifiers import NO_EVIDENCE, Verdict, Verification, Verifier
+from groundguard.verifiers import NO_EVIDENCE, BatchVerifier, Verdict, Verification, Verifier
 
 DECLINE_TEXT = "I can't answer that from the documents."
 
@@ -85,6 +86,8 @@ class Guard:
         self.config = config or GuardConfig()
 
     def verify_claims(self, answer: Answer) -> list[ClaimResult]:
+        if isinstance(self.verifier, BatchVerifier):
+            return self._verify_batch(self.verifier, answer)
         results = []
         for claim in check_citations(answer):
             if claim.citations_ok:
@@ -94,6 +97,19 @@ class Guard:
                 verification = NO_EVIDENCE
             results.append(ClaimResult(claim, verification))
         return results
+
+    def _verify_batch(self, verifier: BatchVerifier, answer: Answer) -> list[ClaimResult]:
+        checked = check_citations(answer)
+        ok = [c for c in checked if c.citations_ok]
+        evidence: list[Chunk] = []
+        seen: set[str] = set()
+        for claim in ok:
+            for chunk in claim.evidence:
+                if chunk.id not in seen:
+                    seen.add(chunk.id)
+                    evidence.append(chunk)
+        verdicts = iter(verifier.verify_batch([c.text for c in ok], evidence))
+        return [ClaimResult(c, next(verdicts) if c.citations_ok else NO_EVIDENCE) for c in checked]
 
     def check(self, answer: Answer) -> GuardResult:
         results = self.verify_claims(answer)

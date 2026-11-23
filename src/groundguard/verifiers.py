@@ -8,9 +8,9 @@ a stub in a test.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -44,6 +44,19 @@ class Verifier(Protocol):
     name: str
 
     def verify(self, claim: str, evidence: Sequence[Chunk]) -> Verification: ...
+
+
+@runtime_checkable
+class BatchVerifier(Protocol):
+    """A verifier that judges all of an answer's claims in one go."""
+
+    name: str
+
+    def verify(self, claim: str, evidence: Sequence[Chunk]) -> Verification: ...
+
+    def verify_batch(
+        self, claims: Sequence[str], evidence: Sequence[Chunk]
+    ) -> list[Verification]: ...
 
 
 NO_EVIDENCE = Verification(Verdict.NOT_ENOUGH_INFO, 0.0, rationale="no evidence cited")
@@ -203,3 +216,66 @@ def _strip_fence(text: str) -> str:
         body = body.split("\n", 1)[1] if "\n" in body else ""
         body = body.rsplit("```", 1)[0]
     return body.strip()
+
+
+SELF_CHECK_PROMPT = """\
+You are reviewing an answer that was written from the numbered source \
+passages below. Find every numbered answer sentence that is not fully \
+supported by the passages: anything contradicted, and anything added that \
+the passages don't state, including details, numbers and conditions.
+
+Reply with a single JSON object and nothing else:
+{"unsupported": [2, 5]}
+
+Use an empty list if every sentence is supported."""
+
+
+class _SelfCheckReply(BaseModel):
+    unsupported: list[int]
+
+
+class SelfCheckVerifier:
+    """Baseline: one LLM call reviews the whole answer at once.
+
+    Much cheaper than judging claim by claim, since the sources are sent
+    once per answer rather than once per claim, but the model has to keep
+    every sentence in view at the same time. It's the "just ask the model
+    to check its answer" approach the per-claim guard is compared against.
+    """
+
+    def __init__(self, client: LLMClient) -> None:
+        self.client = client
+        self.name = f"self-check:{client.model}"
+
+    def verify(self, claim: str, evidence: Sequence[Chunk]) -> Verification:
+        return self.verify_batch([claim], evidence)[0]
+
+    def verify_batch(self, claims: Sequence[str], evidence: Sequence[Chunk]) -> list[Verification]:
+        if not claims:
+            return []
+        if not evidence:
+            return [NO_EVIDENCE] * len(claims)
+        passages = "\n\n".join(f"[{i}] {c.text}" for i, c in enumerate(evidence, start=1))
+        sentences = "\n".join(f"{i}. {text}" for i, text in enumerate(claims, start=1))
+        messages: list[Message] = [
+            {"role": "system", "content": SELF_CHECK_PROMPT},
+            {"role": "user", "content": f"Passages:\n\n{passages}\n\nAnswer:\n{sentences}"},
+        ]
+        completion = self.client.complete(messages, json_mode=True)
+        total = completion.usage.cost_usd
+        # Split the call's cost evenly so per-claim costs still add up.
+        share = None if total is None else total / len(claims)
+        try:
+            reply = _SelfCheckReply.model_validate_json(_strip_fence(completion.text))
+        except ValidationError:
+            failed = Verification(
+                Verdict.NOT_ENOUGH_INFO, 0.0, rationale="self-check reply could not be parsed"
+            )
+            return [replace(failed, cost_usd=share) for _ in claims]
+        flagged = set(reply.unsupported)
+        return [
+            Verification(Verdict.NOT_ENOUGH_INFO, 0.0, cost_usd=share)
+            if i in flagged
+            else Verification(Verdict.SUPPORTED, 1.0, cost_usd=share)
+            for i in range(1, len(claims) + 1)
+        ]

@@ -32,7 +32,7 @@ from groundguard.llm import BudgetExceeded, LLMClient, OpenAICompatibleClient, U
 from groundguard.metrics import AnswerRecord, summarise
 from groundguard.ragtruth import Example, Split, gold_claims, load_ragtruth, select
 from groundguard.stats import Estimate, bootstrap_ci
-from groundguard.verifiers import LLMJudgeVerifier, NLIVerifier, Verifier
+from groundguard.verifiers import LLMJudgeVerifier, NLIVerifier, SelfCheckVerifier, Verifier
 
 
 class DatasetConfig(BaseModel):
@@ -44,7 +44,7 @@ class DatasetConfig(BaseModel):
 
 
 class VerifierConfig(BaseModel):
-    kind: Literal["nli", "llm_judge"]
+    kind: Literal["nli", "llm_judge", "self_check"]
     model: str | None = None
     """NLI model name; for llm_judge the LLM_MODEL env var is used."""
     threshold: float = 0.5
@@ -169,7 +169,9 @@ def build_verifier(config: VerifierConfig, client: LLMClient | None) -> Verifier
             return NLIVerifier(config.model, threshold=config.threshold)
         return NLIVerifier(threshold=config.threshold)
     if client is None:
-        raise ValueError("llm_judge needs an LLM client")
+        raise ValueError(f"{config.kind} needs an LLM client")
+    if config.kind == "self_check":
+        return SelfCheckVerifier(client)
     return LLMJudgeVerifier(client)
 
 
@@ -197,7 +199,7 @@ def run_eval(
     guard = None
     if config.verifier is not None:
         if verifier is None:
-            if client is None and config.verifier.kind == "llm_judge":
+            if client is None and config.verifier.kind != "nli":
                 client = CachedLLMClient(
                     OpenAICompatibleClient.from_env(tracker=tracker), config.cache_path
                 )
