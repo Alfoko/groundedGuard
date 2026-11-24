@@ -1,0 +1,8 @@
+# Unguarded responses: every sentence the model wrote is shown.
+name: baseline
+seed: 13
+dataset:
+  split: test
+  n: 300
+budget_usd: 5
+output_dir: results/ragtruth

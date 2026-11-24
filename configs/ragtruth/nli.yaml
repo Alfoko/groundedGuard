@@ -1,0 +1,16 @@
+# Per-claim entailment with an off-the-shelf MNLI cross-encoder, run locally.
+# Needs the nli extra: uv sync --extra nli
+name: nli
+seed: 13
+dataset:
+  split: test
+  n: 300
+budget_usd: 5
+output_dir: results/ragtruth
+verifier:
+  kind: nli
+  model: MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli
+  threshold: 0.5
+policy:
+  mode: drop
+  min_support: 0.5

@@ -1,0 +1,13 @@
+# Per-claim LLM judge (model from LLM_MODEL). One call per claim.
+name: judge
+seed: 13
+dataset:
+  split: test
+  n: 300
+budget_usd: 5
+output_dir: results/ragtruth
+verifier:
+  kind: llm_judge
+policy:
+  mode: drop
+  min_support: 0.5
