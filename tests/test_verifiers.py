@@ -162,3 +162,27 @@ def test_self_check_fails_closed() -> None:
     client = FakeLLMClient(["all good!"])
     results = SelfCheckVerifier(client).verify_batch(["a.", "b."], [A])
     assert all(r.verdict is Verdict.NOT_ENOUGH_INFO for r in results)
+
+
+def test_nli_model_loads_once_across_threads(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    import groundguard.verifiers as verifiers
+
+    loads = []
+    lock = threading.Lock()
+
+    def slow_loader(name: str) -> TableScorer:
+        with lock:
+            loads.append(name)
+        time.sleep(0.05)
+        return TableScorer({A.text: (0.9, 0.05, 0.05)})
+
+    monkeypatch.setattr(verifiers, "_hf_scorer", slow_loader)
+    verifier = NLIVerifier()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: verifier.verify("claim", [A]), range(16)))
+    assert len(loads) == 1
+    assert all(r.supported for r in results)

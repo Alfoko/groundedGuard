@@ -7,6 +7,7 @@ a stub in a test.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -86,10 +87,15 @@ class NLIVerifier:
         self.name = f"nli:{model_name}"
         self.threshold = threshold
         self._scorer = scorer
+        self._load_lock = threading.Lock()
 
     def _score(self, pairs: Sequence[tuple[str, str]]) -> list[dict[str, float]]:
         if self._scorer is None:
-            self._scorer = _hf_scorer(self.model_name)
+            # Eval workers share one verifier; without the lock each thread
+            # that arrives before the first load finishes loads its own copy.
+            with self._load_lock:
+                if self._scorer is None:
+                    self._scorer = _hf_scorer(self.model_name)
         return self._scorer(pairs)
 
     def verify(self, claim: str, evidence: Sequence[Chunk]) -> Verification:
