@@ -120,7 +120,9 @@ def _hf_scorer(model_name: str, batch_size: int = 16) -> NLIScorer:
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    # Some NLI checkpoints ship fp16 weights; on CPU that's both slower and
+    # less precise than fp32, and recent transformers keep the stored dtype.
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, dtype=torch.float32)
     model.eval()
     labels = {i: _normalise_label(name) for i, name in model.config.id2label.items()}
 
