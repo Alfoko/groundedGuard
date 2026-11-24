@@ -106,6 +106,15 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from groundguard.service import app_from_env
+
+    uvicorn.run(app_from_env(args.index, args.verifier), host=args.host, port=args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="groundguard")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -128,6 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     ev = sub.add_parser("eval", help="run an evaluation config on RAGTruth")
     ev.add_argument("config", help="path to a YAML config in configs/")
+
+    serve = sub.add_parser("serve", help="run the HTTP service (needs the service extra)")
+    serve.add_argument("--index", default=str(DEFAULT_INDEX))
+    serve.add_argument("--verifier", choices=["nli", "llm_judge"], default="nli")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
     return parser
 
 
@@ -137,6 +152,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return cmd_ingest(args)
     if args.command == "eval":
         return cmd_eval(args)
+    if args.command == "serve":
+        return cmd_serve(args)
     return cmd_ask(args)
 
 
