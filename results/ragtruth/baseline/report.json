@@ -1,0 +1,51 @@
+{
+  "name": "baseline",
+  "config": {
+    "name": "baseline",
+    "seed": 13,
+    "dataset": {
+      "root": "data/raw/RAGTruth",
+      "split": "test",
+      "n": 300,
+      "task_types": null
+    },
+    "verifier": null,
+    "policy": {
+      "mode": "drop",
+      "min_support": 0.5,
+      "max_listed": 3
+    },
+    "budget_usd": 5.0,
+    "cache_path": ".cache/llm.sqlite",
+    "output_dir": "results/ragtruth",
+    "chunk_chars": 1200,
+    "workers": 8,
+    "bootstrap_resamples": 10000
+  },
+  "n": 300,
+  "stopped_early": null,
+  "metrics": {
+    "hallucinated_claim_rate": {
+      "value": 0.08314606741573034,
+      "low": 0.05990083856293906,
+      "high": 0.11030111901281524,
+      "n": 300
+    },
+    "answer_hallucination_rate": {
+      "value": 0.32,
+      "low": 0.26666666666666666,
+      "high": 0.37333333333333335,
+      "n": 300
+    },
+    "over_refusal_rate": {
+      "value": 0.0,
+      "low": 0.0,
+      "high": 0.0,
+      "n": 300
+    }
+  },
+  "latency_p50_s": 0.0,
+  "latency_p95_s": 0.0,
+  "cost_per_answer_usd": 0.0,
+  "total_cost_usd": 0.0
+}
