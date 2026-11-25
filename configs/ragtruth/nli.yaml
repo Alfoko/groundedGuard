@@ -1,6 +1,7 @@
 # Per-claim entailment with an off-the-shelf MNLI cross-encoder, run locally.
-# Needs the nli extra: uv sync --extra nli. Two workers: the model already
-# uses all CPU cores, so more threads only contend.
+# Needs the nli extra: uv sync --extra nli. One worker: torch already
+# spreads each batch over all CPU cores, and a second worker thread with
+# its own thread pool oversubscribes them.
 name: nli
 seed: 13
 dataset:
@@ -15,4 +16,4 @@ verifier:
 policy:
   mode: drop
   min_support: 0.5
-workers: 2
+workers: 1
