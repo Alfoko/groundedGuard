@@ -8,14 +8,20 @@ claim is checked against all chunks of its source context.
 
 Every RAGTruth question is answerable from its context by construction, so
 over-refusal here is simply the share of responses the guard declined.
+
+Each finished response is appended to progress.jsonl in the run's output
+directory. A local NLI run over a few hundred responses takes hours on CPU,
+so a run that gets interrupted picks up where it stopped, provided the
+config hasn't changed in a way that affects results.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import time
-from concurrent.futures import CancelledError, ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -175,6 +181,35 @@ def build_verifier(config: VerifierConfig, client: LLMClient | None) -> Verifier
     return LLMJudgeVerifier(client)
 
 
+def config_fingerprint(config: EvalConfig) -> str:
+    """Hash of everything that affects per-response results. Worker count,
+    budget and bootstrap settings don't, so changing them keeps progress."""
+    data = config.model_dump(mode="json", exclude={"workers", "budget_usd", "bootstrap_resamples"})
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def progress_path(config: EvalConfig) -> Path:
+    return config.output_dir / config.name / "progress.jsonl"
+
+
+def load_progress(config: EvalConfig) -> dict[str, ExampleResult]:
+    """Results saved by an earlier, interrupted run of the same config."""
+    path = progress_path(config)
+    if not path.exists():
+        return {}
+    lines = path.read_text().splitlines()
+    if not lines or json.loads(lines[0]).get("fingerprint") != config_fingerprint(config):
+        return {}
+    done: dict[str, ExampleResult] = {}
+    for line in lines[1:]:
+        try:
+            result = ExampleResult(**json.loads(line))
+        except (json.JSONDecodeError, TypeError):
+            break  # a line cut short when the run was killed
+        done[result.example_id] = result
+    return done
+
+
 @dataclass
 class EvalRun:
     config: EvalConfig
@@ -188,9 +223,11 @@ def run_eval(
     examples: list[Example] | None = None,
     verifier: Verifier | None = None,
     client: LLMClient | None = None,
+    resume: bool = True,
 ) -> EvalRun:
     """Run one configuration. `examples`, `verifier` and `client` can be
-    injected for tests; otherwise they're built from the config."""
+    injected for tests; otherwise they're built from the config. With
+    `resume`, responses already in progress.jsonl are not evaluated again."""
     if examples is None:
         examples = load_ragtruth(config.dataset.root, seed=config.seed)
     chosen = sample_examples(examples, config.dataset, config.seed)
@@ -209,21 +246,39 @@ def run_eval(
             tracker.budget_usd = config.budget_usd
         guard = Guard(verifier, config.policy)
 
+    done = load_progress(config) if resume else {}
+    todo = [e for e in chosen if e.id not in done]
+    path = progress_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Rewrite rather than append, so a line cut short by a kill is dropped.
+    lines = [{"fingerprint": config_fingerprint(config)}, *(asdict(r) for r in done.values())]
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+
     run = EvalRun(config, [])
-    with ThreadPoolExecutor(max_workers=config.workers) as pool:
+    fresh: dict[str, ExampleResult] = {}
+    with (
+        ThreadPoolExecutor(max_workers=config.workers) as pool,
+        path.open("a") as progress,
+    ):
         futures = [
-            pool.submit(evaluate_example, example, guard, config.chunk_chars) for example in chosen
+            pool.submit(evaluate_example, example, guard, config.chunk_chars) for example in todo
         ]
-        for future in futures:
+        for future in as_completed(futures):
             try:
-                run.results.append(future.result())
+                result = future.result()
             except BudgetExceeded as exc:
                 if run.stopped_early is None:
                     run.stopped_early = f"budget reached: {exc}"
                     for pending in futures:
                         pending.cancel()
+                continue
             except CancelledError:
                 continue
+            fresh[result.example_id] = result
+            progress.write(json.dumps(asdict(result)) + "\n")
+            progress.flush()
+    finished = done | fresh
+    run.results = [finished[e.id] for e in chosen if e.id in finished]
     return run
 
 
@@ -304,4 +359,6 @@ def write_report(run: EvalRun) -> Path:
     with (out / "records.jsonl").open("w") as f:
         for result in run.results:
             f.write(json.dumps(asdict(result)) + "\n")
+    if run.stopped_early is None:
+        progress_path(run.config).unlink(missing_ok=True)
     return out
