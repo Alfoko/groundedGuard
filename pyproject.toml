@@ -20,6 +20,7 @@ groundguard = "groundguard.cli:main"
 [project.optional-dependencies]
 embeddings = ["sentence-transformers>=3.0"]
 service = ["fastapi>=0.110", "uvicorn>=0.29"]
+demo = ["gradio>=5.0"]
 nli = ["transformers>=4.40", "torch>=2.2", "sentencepiece>=0.2", "protobuf>=4.25"]
 
 [dependency-groups]
@@ -56,7 +57,7 @@ files = ["src/groundguard"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["sentence_transformers.*", "torch.*", "transformers.*"]
+module = ["gradio.*", "sentence_transformers.*", "torch.*", "transformers.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

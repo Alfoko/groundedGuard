@@ -178,11 +178,13 @@ def create_app(
     return app
 
 
-def app_from_env(index_dir: str = "data/index/k8s", verifier_kind: str = "nli") -> FastAPI:
-    """Wire the app from disk and environment, for `groundguard serve`.
+def components_from_env(
+    index_dir: str = "data/index/k8s", verifier_kind: str = "nli"
+) -> tuple[Verifier, HybridRetriever | None, LLMClient | None]:
+    """Verifier, retriever and LLM client from disk and environment.
 
-    /ask is enabled only if the index exists and LLM_BASE_URL/LLM_MODEL are
-    set; otherwise the service starts in verify-only mode.
+    The retriever is None if the index is missing and the client is None if
+    LLM_BASE_URL/LLM_MODEL aren't set; callers then offer verification only.
     """
     from pathlib import Path
 
@@ -206,4 +208,9 @@ def app_from_env(index_dir: str = "data/index/k8s", verifier_kind: str = "nli") 
 
     index = Path(index_dir)
     retriever = corpus.load_retriever(index) if (index / "chunks.jsonl").exists() else None
-    return create_app(chosen, retriever, client)
+    return chosen, retriever, client
+
+
+def app_from_env(index_dir: str = "data/index/k8s", verifier_kind: str = "nli") -> FastAPI:
+    """Wire the app for `groundguard serve`; see components_from_env."""
+    return create_app(*components_from_env(index_dir, verifier_kind))
