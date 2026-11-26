@@ -8,13 +8,20 @@ claim is checked against all chunks of its source context.
 
 Every RAGTruth question is answerable from its context by construction, so
 over-refusal here is simply the share of responses the guard declined.
+
+Each finished response is appended to progress.jsonl in the run's output
+directory. A local NLI run over a few hundred responses takes hours on CPU,
+so a run that gets interrupted picks up where it stopped, provided the
+config hasn't changed in a way that affects results.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import time
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -31,7 +38,7 @@ from groundguard.llm import BudgetExceeded, LLMClient, OpenAICompatibleClient, U
 from groundguard.metrics import AnswerRecord, summarise
 from groundguard.ragtruth import Example, Split, gold_claims, load_ragtruth, select
 from groundguard.stats import Estimate, bootstrap_ci
-from groundguard.verifiers import LLMJudgeVerifier, NLIVerifier, Verifier
+from groundguard.verifiers import LLMJudgeVerifier, NLIVerifier, SelfCheckVerifier, Verifier
 
 
 class DatasetConfig(BaseModel):
@@ -43,7 +50,7 @@ class DatasetConfig(BaseModel):
 
 
 class VerifierConfig(BaseModel):
-    kind: Literal["nli", "llm_judge"]
+    kind: Literal["nli", "llm_judge", "self_check"]
     model: str | None = None
     """NLI model name; for llm_judge the LLM_MODEL env var is used."""
     threshold: float = 0.5
@@ -60,6 +67,8 @@ class EvalConfig(BaseModel):
     cache_path: Path = Path(".cache/llm.sqlite")
     output_dir: Path = Path("results")
     chunk_chars: int = 1200
+    workers: int = Field(default=8, ge=1)
+    """Responses evaluated in parallel; LLM-judge runs are I/O bound."""
     bootstrap_resamples: int = 10_000
 
     @classmethod
@@ -116,12 +125,7 @@ def as_answer(example: Example, chunks: list[Chunk]) -> Answer:
     return Answer(example.question, chunks, structured, [])
 
 
-def evaluate_example(
-    example: Example,
-    guard: Guard | None,
-    tracker: UsageTracker,
-    chunk_chars: int,
-) -> ExampleResult:
+def evaluate_example(example: Example, guard: Guard | None, chunk_chars: int) -> ExampleResult:
     gold = gold_claims(example)
     labels = [g.hallucinated for g in gold]
     if guard is None:
@@ -140,7 +144,6 @@ def evaluate_example(
             0.0,
         )
 
-    cost_before = tracker.cost_usd
     start = time.perf_counter()
     answer = as_answer(example, context_chunks(example, chunk_chars))
     result = guard.check(answer)
@@ -150,6 +153,7 @@ def evaluate_example(
     kept = {id(r) for r in result.kept}
     shown = [r for r in result.claims if id(r) in kept]
     shown_bad = sum(lab for r, lab in zip(result.claims, labels, strict=True) if id(r) in kept)
+    costs = [r.verification.cost_usd for r in result.claims]
     return ExampleResult(
         example_id=example.id,
         task_type=example.task_type,
@@ -161,7 +165,7 @@ def evaluate_example(
         flagged=sum(flagged),
         caught=sum(f and lab for f, lab in zip(flagged, labels, strict=True)),
         latency_s=latency,
-        cost_usd=tracker.cost_usd - cost_before,
+        cost_usd=None if any(c is None for c in costs) else sum(c or 0.0 for c in costs),
     )
 
 
@@ -171,8 +175,39 @@ def build_verifier(config: VerifierConfig, client: LLMClient | None) -> Verifier
             return NLIVerifier(config.model, threshold=config.threshold)
         return NLIVerifier(threshold=config.threshold)
     if client is None:
-        raise ValueError("llm_judge needs an LLM client")
+        raise ValueError(f"{config.kind} needs an LLM client")
+    if config.kind == "self_check":
+        return SelfCheckVerifier(client)
     return LLMJudgeVerifier(client)
+
+
+def config_fingerprint(config: EvalConfig) -> str:
+    """Hash of everything that affects per-response results. Worker count,
+    budget and bootstrap settings don't, so changing them keeps progress."""
+    data = config.model_dump(mode="json", exclude={"workers", "budget_usd", "bootstrap_resamples"})
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def progress_path(config: EvalConfig) -> Path:
+    return config.output_dir / config.name / "progress.jsonl"
+
+
+def load_progress(config: EvalConfig) -> dict[str, ExampleResult]:
+    """Results saved by an earlier, interrupted run of the same config."""
+    path = progress_path(config)
+    if not path.exists():
+        return {}
+    lines = path.read_text().splitlines()
+    if not lines or json.loads(lines[0]).get("fingerprint") != config_fingerprint(config):
+        return {}
+    done: dict[str, ExampleResult] = {}
+    for line in lines[1:]:
+        try:
+            result = ExampleResult(**json.loads(line))
+        except (json.JSONDecodeError, TypeError):
+            break  # a line cut short when the run was killed
+        done[result.example_id] = result
+    return done
 
 
 @dataclass
@@ -188,9 +223,11 @@ def run_eval(
     examples: list[Example] | None = None,
     verifier: Verifier | None = None,
     client: LLMClient | None = None,
+    resume: bool = True,
 ) -> EvalRun:
     """Run one configuration. `examples`, `verifier` and `client` can be
-    injected for tests; otherwise they're built from the config."""
+    injected for tests; otherwise they're built from the config. With
+    `resume`, responses already in progress.jsonl are not evaluated again."""
     if examples is None:
         examples = load_ragtruth(config.dataset.root, seed=config.seed)
     chosen = sample_examples(examples, config.dataset, config.seed)
@@ -199,7 +236,7 @@ def run_eval(
     guard = None
     if config.verifier is not None:
         if verifier is None:
-            if client is None and config.verifier.kind == "llm_judge":
+            if client is None and config.verifier.kind != "nli":
                 client = CachedLLMClient(
                     OpenAICompatibleClient.from_env(tracker=tracker), config.cache_path
                 )
@@ -209,13 +246,39 @@ def run_eval(
             tracker.budget_usd = config.budget_usd
         guard = Guard(verifier, config.policy)
 
+    done = load_progress(config) if resume else {}
+    todo = [e for e in chosen if e.id not in done]
+    path = progress_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Rewrite rather than append, so a line cut short by a kill is dropped.
+    lines = [{"fingerprint": config_fingerprint(config)}, *(asdict(r) for r in done.values())]
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+
     run = EvalRun(config, [])
-    for example in chosen:
-        try:
-            run.results.append(evaluate_example(example, guard, tracker, config.chunk_chars))
-        except BudgetExceeded as exc:
-            run.stopped_early = f"budget reached after {len(run.results)} examples: {exc}"
-            break
+    fresh: dict[str, ExampleResult] = {}
+    with (
+        ThreadPoolExecutor(max_workers=config.workers) as pool,
+        path.open("a") as progress,
+    ):
+        futures = [
+            pool.submit(evaluate_example, example, guard, config.chunk_chars) for example in todo
+        ]
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+            except BudgetExceeded as exc:
+                if run.stopped_early is None:
+                    run.stopped_early = f"budget reached: {exc}"
+                    for pending in futures:
+                        pending.cancel()
+                continue
+            except CancelledError:
+                continue
+            fresh[result.example_id] = result
+            progress.write(json.dumps(asdict(result)) + "\n")
+            progress.flush()
+    finished = done | fresh
+    run.results = [finished[e.id] for e in chosen if e.id in finished]
     return run
 
 
@@ -296,4 +359,6 @@ def write_report(run: EvalRun) -> Path:
     with (out / "records.jsonl").open("w") as f:
         for result in run.results:
             f.write(json.dumps(asdict(result)) + "\n")
+    if run.stopped_early is None:
+        progress_path(run.config).unlink(missing_ok=True)
     return out

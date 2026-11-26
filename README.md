@@ -47,17 +47,19 @@ flowchart LR
 
 ## Results
 
-All numbers will come from scripts in this repository. None have been measured
-yet.
-
-Benchmark: RAGTruth test split.
+Seeded sample of 300 RAGTruth test responses; 95% bootstrap intervals over
+responses. Full methodology and limitations are in
+[docs/results.md](docs/results.md), and the run output is committed under
+[results/ragtruth/](results/ragtruth/).
 
 | System | Hallucinated claims | Over-refusal | Added latency (p50) | Added cost / answer |
 |---|---|---|---|---|
-| Plain RAG (no guard) | TBD | TBD | — | — |
-| Guard + NLI verifier | TBD | TBD | TBD | TBD |
+| Plain RAG (no guard) | 8.3% [6.0, 11.0] | 0.0% | — | — |
+| Guard + NLI verifier | 2.3% [1.5, 3.2] | 15.7% [11.7, 19.7] | 4.46 s (CPU) | $0 (local) |
 | Guard + LLM judge | TBD | TBD | TBD | TBD |
-| Guard + fine-tuned verifier | TBD | TBD | TBD | TBD |
+| LLM self-check | TBD | TBD | TBD | TBD |
+
+The LLM-based rows are configured but not yet run.
 
 ## Quickstart
 

@@ -142,3 +142,16 @@ def test_unanswerable_answer_declines_without_verifying() -> None:
 def test_config_validates_threshold() -> None:
     with pytest.raises(ValueError):
         GuardConfig(min_support=1.5)
+
+
+def test_batch_verifier_gets_one_call_with_valid_claims_only() -> None:
+    from groundguard.llm import FakeLLMClient
+    from groundguard.verifiers import SelfCheckVerifier
+
+    client = FakeLLMClient(['{"unsupported": [2]}'])
+    guard = Guard(SelfCheckVerifier(client), GuardConfig(min_support=0.0))
+    result = guard.check(answer(("A.", [1]), ("Uncited.", []), ("B.", [2]), ("C.", [1])))
+
+    assert len(client.calls) == 1
+    assert "1. A.\n2. B.\n3. C." in client.calls[0][1]["content"]
+    assert [r.claim.text for r in result.kept] == ["A.", "C."]

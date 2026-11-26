@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import random
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -63,17 +64,21 @@ class UsageTracker:
     completion_tokens: int = 0
     cost_usd: float = 0.0
     latencies_s: list[float] = field(default_factory=list)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def check(self) -> None:
-        if self.budget_usd is not None and self.cost_usd >= self.budget_usd:
-            raise BudgetExceeded(f"spent ${self.cost_usd:.4f} of a ${self.budget_usd:.2f} budget")
+        with self._lock:
+            spent = self.cost_usd
+        if self.budget_usd is not None and spent >= self.budget_usd:
+            raise BudgetExceeded(f"spent ${spent:.4f} of a ${self.budget_usd:.2f} budget")
 
     def record(self, usage: Usage) -> None:
-        self.calls += 1
-        self.prompt_tokens += usage.prompt_tokens
-        self.completion_tokens += usage.completion_tokens
-        self.cost_usd += usage.cost_usd or 0.0
-        self.latencies_s.append(usage.latency_s)
+        with self._lock:
+            self.calls += 1
+            self.prompt_tokens += usage.prompt_tokens
+            self.completion_tokens += usage.completion_tokens
+            self.cost_usd += usage.cost_usd or 0.0
+            self.latencies_s.append(usage.latency_s)
 
 
 class LLMClient(Protocol):

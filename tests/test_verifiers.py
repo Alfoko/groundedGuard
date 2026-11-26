@@ -4,7 +4,13 @@ import pytest
 
 from groundguard.chunking import Chunk
 from groundguard.llm import FakeLLMClient
-from groundguard.verifiers import LLMJudgeVerifier, NLIVerifier, Verdict, _normalise_label
+from groundguard.verifiers import (
+    LLMJudgeVerifier,
+    NLIVerifier,
+    SelfCheckVerifier,
+    Verdict,
+    _normalise_label,
+)
 
 
 def chunk(cid: str, text: str) -> Chunk:
@@ -140,3 +146,43 @@ def test_judge_skips_llm_without_evidence() -> None:
     verifier, client = judge("unused")
     assert verifier.verify("claim", []).verdict is Verdict.NOT_ENOUGH_INFO
     assert client.calls == []
+
+
+def test_self_check_flags_listed_sentences_in_one_call() -> None:
+    client = FakeLLMClient(['{"unsupported": [2]}'], cost_per_call=0.03)
+    results = SelfCheckVerifier(client).verify_batch(["Pods share a network.", "Jobs fly."], [A, B])
+    assert [r.verdict for r in results] == [Verdict.SUPPORTED, Verdict.NOT_ENOUGH_INFO]
+    assert sum(r.cost_usd or 0 for r in results) == pytest.approx(0.03)
+    assert len(client.calls) == 1
+    prompt = client.calls[0][1]["content"]
+    assert "1. Pods share a network.\n2. Jobs fly." in prompt
+
+
+def test_self_check_fails_closed() -> None:
+    client = FakeLLMClient(["all good!"])
+    results = SelfCheckVerifier(client).verify_batch(["a.", "b."], [A])
+    assert all(r.verdict is Verdict.NOT_ENOUGH_INFO for r in results)
+
+
+def test_nli_model_loads_once_across_threads(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    import groundguard.verifiers as verifiers
+
+    loads = []
+    lock = threading.Lock()
+
+    def slow_loader(name: str) -> TableScorer:
+        with lock:
+            loads.append(name)
+        time.sleep(0.05)
+        return TableScorer({A.text: (0.9, 0.05, 0.05)})
+
+    monkeypatch.setattr(verifiers, "_hf_scorer", slow_loader)
+    verifier = NLIVerifier()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: verifier.verify("claim", [A]), range(16)))
+    assert len(loads) == 1
+    assert all(r.supported for r in results)

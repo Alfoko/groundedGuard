@@ -45,3 +45,15 @@ def test_key_depends_on_model_and_message_content() -> None:
     assert base == cache_key("m", list(MSGS), 0.0, None, False)
     assert base != cache_key("other", MSGS, 0.0, None, False)
     assert base != cache_key("m", [{"role": "user", "content": "hi!"}], 0.0, None, False)
+
+
+def test_cache_is_safe_across_threads(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    fake = FakeLLMClient(lambda msgs: msgs[-1]["content"].upper())
+    cached = CachedLLMClient(fake, tmp_path / "llm.sqlite")
+    prompts: list[list[Message]] = [[{"role": "user", "content": f"q{i % 10}"}] for i in range(100)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        replies = list(pool.map(cached.complete, prompts))
+    assert [r.text for r in replies] == [p[0]["content"].upper() for p in prompts]
+    assert cached.hits + cached.misses == 100

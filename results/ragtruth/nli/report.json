@@ -1,0 +1,67 @@
+{
+  "name": "nli",
+  "config": {
+    "name": "nli",
+    "seed": 13,
+    "dataset": {
+      "root": "data/raw/RAGTruth",
+      "split": "test",
+      "n": 300,
+      "task_types": null
+    },
+    "verifier": {
+      "kind": "nli",
+      "model": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+      "threshold": 0.5
+    },
+    "policy": {
+      "mode": "drop",
+      "min_support": 0.5,
+      "max_listed": 3
+    },
+    "budget_usd": 5.0,
+    "cache_path": ".cache/llm.sqlite",
+    "output_dir": "results/ragtruth",
+    "chunk_chars": 1200,
+    "workers": 1,
+    "bootstrap_resamples": 10000
+  },
+  "n": 300,
+  "stopped_early": null,
+  "metrics": {
+    "hallucinated_claim_rate": {
+      "value": 0.022939068100358423,
+      "low": 0.014760082772999198,
+      "high": 0.03195644917363424,
+      "n": 300
+    },
+    "answer_hallucination_rate": {
+      "value": 0.11067193675889328,
+      "low": 0.0728744939271255,
+      "high": 0.15079365079365079,
+      "n": 300
+    },
+    "over_refusal_rate": {
+      "value": 0.15666666666666668,
+      "low": 0.11666666666666667,
+      "high": 0.19666666666666666,
+      "n": 300
+    },
+    "verifier_precision": {
+      "value": 0.199438202247191,
+      "low": 0.1426145134228188,
+      "high": 0.2622552191356294,
+      "n": 300
+    },
+    "verifier_recall": {
+      "value": 0.7675675675675676,
+      "low": 0.6842105263157895,
+      "high": 0.8295454545454546,
+      "n": 300
+    }
+  },
+  "latency_p50_s": 4.457254740499991,
+  "latency_p95_s": 16.887507674100124,
+  "cost_per_answer_usd": 0.0,
+  "total_cost_usd": 0.0
+}

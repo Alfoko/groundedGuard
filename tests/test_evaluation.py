@@ -9,6 +9,7 @@ from groundguard.chunking import Chunk
 from groundguard.evaluation import (
     DatasetConfig,
     EvalConfig,
+    ExampleResult,
     VerifierConfig,
     run_eval,
     sample_examples,
@@ -109,7 +110,7 @@ def test_subset_sampling_is_seeded() -> None:
 def test_budget_stops_the_run_cleanly(tmp_path: Path) -> None:
     reply = '{"verdict": "supported", "passage": 1, "confidence": 0.9}'
     client = FakeLLMClient(lambda _: reply, cost_per_call=0.01)
-    cfg = config(tmp_path, verifier=VerifierConfig(kind="llm_judge"), budget_usd=0.025)
+    cfg = config(tmp_path, verifier=VerifierConfig(kind="llm_judge"), budget_usd=0.025, workers=1)
     run = run_eval(cfg, examples=EXAMPLES, verifier=LLMJudgeVerifier(client), client=client)
 
     assert run.stopped_early is not None
@@ -136,3 +137,64 @@ def test_config_round_trips_through_yaml(tmp_path: Path) -> None:
 def test_cli_eval_command_is_wired(tmp_path: Path) -> None:
     args = cli.build_parser().parse_args(["eval", str(tmp_path / "c.yaml")])
     assert args.command == "eval"
+
+
+def test_parallel_run_matches_sequential(tmp_path: Path) -> None:
+    def run(workers: int) -> list[tuple[str, str, int]]:
+        cfg = config(tmp_path, verifier=VerifierConfig(kind="nli"), workers=workers)
+        results = run_eval(cfg, examples=EXAMPLES, verifier=InContextVerifier()).results
+        return [(r.example_id, r.decision, r.shown) for r in results]
+
+    assert run(4) == run(1)
+
+
+def test_judge_cost_is_attributed_per_response(tmp_path: Path) -> None:
+    reply = '{"verdict": "supported", "passage": 1, "confidence": 0.9}'
+    client = FakeLLMClient(lambda _: reply, cost_per_call=0.01)
+    cfg = config(tmp_path, verifier=VerifierConfig(kind="llm_judge"), workers=3)
+    run = run_eval(cfg, examples=EXAMPLES, verifier=LLMJudgeVerifier(client), client=client)
+    # One judge call per claim, two claims per dev response.
+    assert [r.cost_usd for r in run.results] == pytest.approx([0.02, 0.02, 0.02])
+
+
+class CountingVerifier(InContextVerifier):
+    def __init__(self) -> None:
+        self.claims: list[str] = []
+
+    def verify(self, claim: str, evidence: Sequence[Chunk]) -> Verification:
+        self.claims.append(claim)
+        return super().verify(claim, evidence)
+
+
+def test_interrupted_run_resumes_from_progress(tmp_path: Path) -> None:
+    from groundguard.evaluation import progress_path
+
+    cfg = config(tmp_path, verifier=VerifierConfig(kind="nli"))
+    full = run_eval(cfg, examples=EXAMPLES, verifier=InContextVerifier(), resume=False)
+
+    # Simulate a kill after the first response, mid-way through writing the second.
+    path = progress_path(cfg)
+    header, first, second = path.read_text().splitlines()[:3]
+    path.write_text(f"{header}\n{first}\n{second[:20]}")
+
+    counting = CountingVerifier()
+    resumed = run_eval(cfg.model_copy(update={"workers": 3}), examples=EXAMPLES, verifier=counting)
+
+    def key(r: ExampleResult) -> tuple[str, str, int, int]:
+        return (r.example_id, r.decision, r.shown, r.caught)
+
+    assert [key(r) for r in resumed.results] == [key(r) for r in full.results]
+    assert len(counting.claims) == 4  # only the two unfinished responses were checked
+    assert len(path.read_text().splitlines()) == 4
+
+    write_report(resumed)
+    assert not path.exists()
+
+
+def test_changed_config_ignores_old_progress(tmp_path: Path) -> None:
+    cfg = config(tmp_path, verifier=VerifierConfig(kind="nli"))
+    run_eval(cfg, examples=EXAMPLES, verifier=InContextVerifier())
+    counting = CountingVerifier()
+    stricter = cfg.model_copy(update={"policy": cfg.policy.model_copy(update={"mode": "strict"})})
+    run_eval(stricter, examples=EXAMPLES, verifier=counting)
+    assert len(counting.claims) == 6

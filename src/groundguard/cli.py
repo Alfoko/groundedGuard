@@ -1,4 +1,4 @@
-"""Command line entry point: `groundguard ingest` and `groundguard ask`."""
+"""Command line entry point: ingest, ask, eval, compare, serve and demo."""
 
 from __future__ import annotations
 
@@ -106,6 +106,32 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compare(args: argparse.Namespace) -> int:
+    from groundguard.summary import write_summary
+
+    out = write_summary(Path(args.results), args.reference)
+    print(out.read_text())
+    return 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from groundguard.service import app_from_env
+
+    uvicorn.run(app_from_env(args.index, args.verifier), host=args.host, port=args.port)
+    return 0
+
+
+def cmd_demo(args: argparse.Namespace) -> int:
+    from groundguard.demo import build_demo
+    from groundguard.service import components_from_env
+
+    verifier, retriever, client = components_from_env(args.index, args.verifier)
+    build_demo(verifier, retriever, client).launch(server_name=args.host, server_port=args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="groundguard")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -128,6 +154,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     ev = sub.add_parser("eval", help="run an evaluation config on RAGTruth")
     ev.add_argument("config", help="path to a YAML config in configs/")
+
+    cmp = sub.add_parser("compare", help="tabulate finished eval runs with paired tests")
+    cmp.add_argument("results", nargs="?", default="results/ragtruth")
+    cmp.add_argument("--reference", default="baseline")
+
+    serve = sub.add_parser("serve", help="run the HTTP service (needs the service extra)")
+    serve.add_argument("--index", default=str(DEFAULT_INDEX))
+    serve.add_argument("--verifier", choices=["nli", "llm_judge"], default="nli")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+
+    demo = sub.add_parser("demo", help="run the Gradio demo (needs the demo extra)")
+    demo.add_argument("--index", default=str(DEFAULT_INDEX))
+    demo.add_argument("--verifier", choices=["nli", "llm_judge"], default="nli")
+    demo.add_argument("--host", default="127.0.0.1")
+    demo.add_argument("--port", type=int, default=7860)
     return parser
 
 
@@ -137,6 +179,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return cmd_ingest(args)
     if args.command == "eval":
         return cmd_eval(args)
+    if args.command == "compare":
+        return cmd_compare(args)
+    if args.command == "demo":
+        return cmd_demo(args)
+    if args.command == "serve":
+        return cmd_serve(args)
     return cmd_ask(args)
 
 

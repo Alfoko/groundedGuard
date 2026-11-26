@@ -1,0 +1,12 @@
+# Same judge, but any unsupported sentence rejects the whole response.
+name: judge-strict
+seed: 13
+dataset:
+  split: test
+  n: 300
+budget_usd: 5
+output_dir: results/ragtruth
+verifier:
+  kind: llm_judge
+policy:
+  mode: strict
