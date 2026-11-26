@@ -17,3 +17,6 @@ outputs/
 .cache/
 
 .env
+
+# Partial per-response output of an eval run that is still going.
+results/**/progress.jsonl
