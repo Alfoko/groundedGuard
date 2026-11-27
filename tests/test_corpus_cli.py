@@ -5,6 +5,7 @@ import pytest
 
 from groundguard import cli, corpus
 from groundguard.llm import FakeLLMClient
+from groundguard.verifiers import Verdict, Verification
 
 POD_PAGE = """---
 title: Pods
@@ -107,6 +108,49 @@ def test_ask_prints_claims_with_numbered_sources(
     assert "[1] CronJob (concepts/cronjob.md)" in printed
     # The retrieved chunks were what the model saw.
     assert "repeating schedule" in fake.calls[0][1]["content"]
+
+
+class KeywordVerifier:
+    """Supported iff the claim mentions "schedule"."""
+
+    name = "keyword"
+
+    def verify(self, claim: str, evidence: object) -> Verification:
+        ok = "schedule" in claim
+        return Verification(Verdict.SUPPORTED if ok else Verdict.NOT_ENOUGH_INFO, float(ok))
+
+
+def test_ask_with_guard_shows_what_was_dropped(
+    docs_tree: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "index"
+    cli.main(["ingest", "--docs", str(docs_tree), "--index", str(out)])
+    capsys.readouterr()
+    reply = json.dumps(
+        {
+            "answerable": True,
+            "claims": [
+                {"text": "CronJobs run Jobs on a schedule.", "sources": [1]},
+                {"text": "CronJobs were added in 2009.", "sources": [1]},
+            ],
+        }
+    )
+    argv = ["ask", "what does a cronjob do", "--index", str(out), "--guard", "nli"]
+
+    args = cli.build_parser().parse_args(argv)
+    assert cli.cmd_ask(args, FakeLLMClient([reply]), KeywordVerifier()) == 0
+    printed = capsys.readouterr().out
+    assert printed.startswith("CronJobs run Jobs on a schedule.")
+    assert "Guard: partial" in printed
+    assert "dropped CronJobs were added in 2009. [1]  not_enough_info, 0.00" in printed
+    assert "[1] CronJob (concepts/cronjob.md)" in printed
+
+    args = cli.build_parser().parse_args([*argv, "--json", "--policy", "strict"])
+    assert cli.cmd_ask(args, FakeLLMClient([reply]), KeywordVerifier()) == 0
+    guard = json.loads(capsys.readouterr().out)["guard"]
+    assert guard["decision"] == "decline"
+    assert guard["verdicts"] == ["supported", "not_enough_info"]
+    assert guard["kept"] == []
 
 
 def test_ask_without_index_fails_cleanly(
