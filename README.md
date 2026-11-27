@@ -7,14 +7,14 @@ declines, saying what it couldn't confirm, when too little survives.
 
 ## Headline
 
-On 300 RAGTruth test responses, the guard with an off-the-shelf NLI verifier
-cut the share of shown claims that annotators marked as hallucinated from
-**8.3% to 2.3%**, and the share of answers containing any hallucination from
-**32.0% to 11.1%**. The price is **15.7% over-refusal** on questions that are
-all answerable, and about 4.5 s of CPU time per answer (median). The verifier
-catches 76.8% of hallucinated claims, but only 19.9% of the claims it flags
-are actually hallucinated: it is a high-recall, low-precision filter whose
-threshold has not been tuned yet.
+On 300 RAGTruth test responses, every guard configuration cut the share of
+shown claims that annotators marked as hallucinated from **8.3%** to
+between 1.4% and 5.0%. The best trade-off was the guard with an LLM judge
+(`gpt-4o-mini`): **2.6%** hallucinated claims, statistically
+indistinguishable from the local NLI verifier's 2.3%, while declining
+**9.7%** of answerable questions against NLI's 15.7% (paired p = 0.007), for
+about a tenth of a cent per answer. All the verifiers flag many correct
+claims too (precision 18–28%), so most of what a guard drops was fine.
 
 ## Problem
 
@@ -67,13 +67,15 @@ records, is committed under [results/ragtruth/](results/ragtruth/).
 |---|---|---|---|---|---|
 | No guard | 8.3% [6.0, 11.0] | 32.0% [26.7, 37.3] | 0.0% | — | — |
 | Guard + NLI verifier | 2.3% [1.5, 3.2] | 11.1% [7.3, 15.1] | 15.7% [11.7, 19.7] | 4.46 s (CPU) | $0 (local) |
-| Guard + LLM judge | TBD | TBD | TBD | TBD | TBD |
-| Guard + LLM judge, strict | TBD | TBD | TBD | TBD | TBD |
-| LLM self-check (one call) | TBD | TBD | TBD | TBD | TBD |
+| Guard + LLM judge | 2.6% [1.7, 3.4] | 13.3% [9.4, 17.4] | 9.7% [6.3, 13.0] | 8.35 s | $0.0011 |
+| Guard + LLM judge, strict | 1.4% [0.7, 2.2] | 8.2% [4.1, 12.9] | 51.3% [45.7, 57.0] | — | $0.0011 |
+| LLM self-check (one call) | 5.0% [2.3, 8.3] | 10.5% [7.1, 14.2] | 5.0% [2.7, 7.7] | 0.72 s | $0.00014 |
 
-All three differences between the NLI guard and no guard have paired
-permutation p < 0.001. The LLM rows are implemented and configured but not
-yet run (see [docs/results.md](docs/results.md)).
+Every guarded row differs from no guard on all three rates with paired
+permutation p < 0.001. The LLM rows use `openai/gpt-4o-mini`; the strict
+row reused the judge's cached verdicts, so it has no meaningful latency of
+its own. Strict mode declines half of all answers, so `drop` is the default
+policy.
 
 ## Quickstart
 
@@ -183,8 +185,7 @@ saves progress per response and resumes if interrupted.
 
 ## Limitations
 
-- Only the no-guard and NLI rows are measured; the LLM judge and self-check
-  runs are pending.
+- One LLM (`gpt-4o-mini`) for the judge and self-check rows.
 - The NLI threshold and support threshold are defaults, not tuned on the
   held-out dev slice; the low precision above is partly a consequence.
 - The NLI verifier scores each cited chunk separately, so claims that need
@@ -196,8 +197,8 @@ saves progress per response and resumes if interrupted.
 
 ## Future work
 
-- Run the LLM judge, strict judge and self-check configs, and tune
-  thresholds on the dev slice.
+- Tune the NLI threshold and `min_support` on the dev slice, and try
+  stronger judge models.
 - A verifier fine-tuned on RAGTruth train (and the training pipeline for it),
   which was in the original plan and cut for time.
 - A RAGAS faithfulness baseline in the same harness.
