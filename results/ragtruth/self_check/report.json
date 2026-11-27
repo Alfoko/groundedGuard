@@ -1,0 +1,67 @@
+{
+  "name": "self_check",
+  "config": {
+    "name": "self_check",
+    "seed": 13,
+    "dataset": {
+      "root": "data/raw/RAGTruth",
+      "split": "test",
+      "n": 300,
+      "task_types": null
+    },
+    "verifier": {
+      "kind": "self_check",
+      "model": null,
+      "threshold": 0.5
+    },
+    "policy": {
+      "mode": "drop",
+      "min_support": 0.5,
+      "max_listed": 3
+    },
+    "budget_usd": 5.0,
+    "cache_path": ".cache/llm.sqlite",
+    "output_dir": "results/ragtruth",
+    "chunk_chars": 1200,
+    "workers": 8,
+    "bootstrap_resamples": 10000
+  },
+  "n": 300,
+  "stopped_early": null,
+  "metrics": {
+    "hallucinated_claim_rate": {
+      "value": 0.050030506406345335,
+      "low": 0.023299423403403106,
+      "high": 0.08314087759815242,
+      "n": 300
+    },
+    "answer_hallucination_rate": {
+      "value": 0.10526315789473684,
+      "low": 0.0706713780918728,
+      "high": 0.14186851211072665,
+      "n": 300
+    },
+    "over_refusal_rate": {
+      "value": 0.05,
+      "low": 0.02666666666666667,
+      "high": 0.07666666666666666,
+      "n": 300
+    },
+    "verifier_precision": {
+      "value": 0.1806797853309481,
+      "low": 0.1435937365610962,
+      "high": 0.22051537070524407,
+      "n": 300
+    },
+    "verifier_recall": {
+      "value": 0.5459459459459459,
+      "low": 0.4101551527387641,
+      "high": 0.7181255317137725,
+      "n": 300
+    }
+  },
+  "latency_p50_s": 0.7210449610000182,
+  "latency_p95_s": 0.9777524103500355,
+  "cost_per_answer_usd": 0.0001353814999999999,
+  "total_cost_usd": 0.040614449999999976
+}
