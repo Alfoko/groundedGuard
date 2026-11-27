@@ -1,0 +1,67 @@
+{
+  "name": "judge",
+  "config": {
+    "name": "judge",
+    "seed": 13,
+    "dataset": {
+      "root": "data/raw/RAGTruth",
+      "split": "test",
+      "n": 300,
+      "task_types": null
+    },
+    "verifier": {
+      "kind": "llm_judge",
+      "model": null,
+      "threshold": 0.5
+    },
+    "policy": {
+      "mode": "drop",
+      "min_support": 0.5,
+      "max_listed": 3
+    },
+    "budget_usd": 5.0,
+    "cache_path": ".cache/llm.sqlite",
+    "output_dir": "results/ragtruth",
+    "chunk_chars": 1200,
+    "workers": 8,
+    "bootstrap_resamples": 10000
+  },
+  "n": 300,
+  "stopped_early": null,
+  "metrics": {
+    "hallucinated_claim_rate": {
+      "value": 0.025529265255292654,
+      "low": 0.017441762980986698,
+      "high": 0.034375,
+      "n": 300
+    },
+    "answer_hallucination_rate": {
+      "value": 0.13284132841328414,
+      "low": 0.09363295880149813,
+      "high": 0.1742200577826825,
+      "n": 300
+    },
+    "over_refusal_rate": {
+      "value": 0.09666666666666666,
+      "low": 0.06333333333333334,
+      "high": 0.13,
+      "n": 300
+    },
+    "verifier_precision": {
+      "value": 0.2804878048780488,
+      "low": 0.19706447315425846,
+      "high": 0.3717171717171717,
+      "n": 300
+    },
+    "verifier_recall": {
+      "value": 0.745945945945946,
+      "low": 0.6474799351270428,
+      "high": 0.8220359354628423,
+      "n": 300
+    }
+  },
+  "latency_p50_s": 8.353418467000012,
+  "latency_p95_s": 19.585293043950045,
+  "cost_per_answer_usd": 0.0010996094999999998,
+  "total_cost_usd": 0.32988284999999995
+}

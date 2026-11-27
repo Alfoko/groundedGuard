@@ -10,8 +10,10 @@ from pathlib import Path
 
 from groundguard import corpus
 from groundguard.generation import Answer, AnswerGenerator
+from groundguard.guard import Guard, GuardConfig, GuardResult, PolicyMode
 from groundguard.llm import LLMClient, LLMError, OpenAICompatibleClient
 from groundguard.retrieval import Embedder
+from groundguard.verifiers import Verifier
 
 DEFAULT_INDEX = Path("data/index/k8s")
 DEFAULT_CHECKOUT = Path("data/raw/k8s-website")
@@ -63,7 +65,35 @@ def format_answer(answer: Answer) -> str:
     return "\n".join(lines)
 
 
-def cmd_ask(args: argparse.Namespace, client: LLMClient | None = None) -> int:
+def format_guarded(answer: Answer, result: GuardResult) -> str:
+    kept = {id(r) for r in result.kept}
+    lines = [result.message, "", f"Guard: {result.decision}, claim by claim:"]
+    for r in result.claims:
+        mark = "kept   " if id(r) in kept else "dropped"
+        refs = "".join(f"[{n}]" for n in r.claim.cited) or "(no citation)"
+        verdict = r.verification.verdict if r.claim.citations_ok else r.claim.status
+        lines.append(f"  {mark} {r.claim.text} {refs}  {verdict}, {r.verification.score:.2f}")
+    cited = sorted({n for r in result.kept for n in r.claim.cited})
+    if cited:
+        lines += ["", "Sources:"]
+        for n in cited:
+            chunk = answer.chunk_for(n)
+            if chunk:
+                lines.append(f"  [{n}] {chunk.section} ({chunk.source})")
+    return "\n".join(lines)
+
+
+def _verifier(kind: str, client: LLMClient) -> Verifier:
+    from groundguard.verifiers import LLMJudgeVerifier, NLIVerifier
+
+    return LLMJudgeVerifier(client) if kind == "llm_judge" else NLIVerifier()
+
+
+def cmd_ask(
+    args: argparse.Namespace,
+    client: LLMClient | None = None,
+    verifier: Verifier | None = None,
+) -> int:
     index_dir = Path(args.index)
     if not (index_dir / "chunks.jsonl").exists():
         print(f"No index at {index_dir}; run `groundguard ingest` first.", file=sys.stderr)
@@ -77,18 +107,28 @@ def cmd_ask(args: argparse.Namespace, client: LLMClient | None = None) -> int:
     retriever = corpus.load_retriever(index_dir, _embedder(args.embed))
     hits = retriever.search(args.question, k=args.k)
     answer = AnswerGenerator(client).generate(args.question, [h.chunk for h in hits])
+    result = None
+    if args.guard != "none":
+        verifier = verifier or _verifier(args.guard, client)
+        policy = GuardConfig(mode=PolicyMode(args.policy), min_support=args.min_support)
+        result = Guard(verifier, policy).check(answer)
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "question": answer.question,
-                    "answer": answer.structured.model_dump(),
-                    "sources": [h.chunk.id for h in hits],
-                    "cost_usd": answer.usage.cost_usd,
-                },
-                indent=2,
-            )
-        )
+        data = {
+            "question": answer.question,
+            "answer": answer.structured.model_dump(),
+            "sources": [h.chunk.id for h in hits],
+            "cost_usd": answer.usage.cost_usd,
+        }
+        if result is not None:
+            data["guard"] = {
+                "decision": str(result.decision),
+                "message": result.message,
+                "verdicts": [str(r.verification.verdict) for r in result.claims],
+                "kept": [r.claim.index for r in result.kept],
+            }
+        print(json.dumps(data, indent=2))
+    elif result is not None:
+        print(format_guarded(answer, result))
     else:
         print(format_answer(answer))
     return 0
@@ -151,6 +191,14 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("-k", type=int, default=6, help="number of chunks to retrieve")
     ask.add_argument("--embed", metavar="MODEL", help="embedding model used at ingest")
     ask.add_argument("--json", action="store_true")
+    ask.add_argument(
+        "--guard",
+        choices=["none", "nli", "llm_judge"],
+        default="none",
+        help="check each claim before showing it (nli needs the nli extra)",
+    )
+    ask.add_argument("--policy", choices=["drop", "strict"], default="drop")
+    ask.add_argument("--min-support", type=float, default=0.5)
 
     ev = sub.add_parser("eval", help="run an evaluation config on RAGTruth")
     ev.add_argument("config", help="path to a YAML config in configs/")
